@@ -1,0 +1,69 @@
+1. What the project is
+
+An extension of the IEEE Access 2025 paper "Trust at the Edge: ABAC-Secured Federated Learning for Smart Home Access Control Using Blockchain". The paper builds federated learning (FL) where clients hold ABAC credentials and a blockchain records trust. This project adds detection of malicious clients that hold valid credentials, using cohort-conditioned anomaly detection on their model updates plus a reputation system.
+
+Two separate problems. Never mix their metrics:
+
+Traffic classification (is this network flow benign/attack, which attack class): global-model quality (accuracy, F1, ROC-AUC...).
+Malicious-client detection (is this FL client poisoning the model): detection AUC, TPR@1%FPR, honest clients revoked, delay... Better classification is not better detection, and neither is a blockchain benefit.
+
+Dataset: CICIoT2023 (63 merged CSVs, 39 flow features + Label), grouped into 8 classes: Benign, DDoS, DoS, Mirai, Recon, Spoofing, Web, BruteForce. The CSVs have no device, session, capture or timestamp column. The ABAC device_type attribute is therefore synthetic: clients are assigned to device types, and the parameter rho (0..1) controls how strongly device type shapes a client's class mix.
+
+Environments: Colab for training; the owner's Windows laptop (Docker Desktop + WSL2) for a real Hyperledger Fabric test-network (Phase 2).
+
+
+
+
+---------------------------------------------------Architecture--------------------------------------------------------------
+
+
+START → Device registration → Fabric CA issues X.509 (CA-signed static attrs:
+        client_id, device_type, org, location_class)
+  │
+  ▼
+1. PRE-TRAINING ABAC GATE  [on-chain]
+   cert valid ∧ P(A_static) ∧ status ∈ {ACTIVE, PROBATION} ∧ R_k ≥ R_min,c(k)
+   → also emits cohort key c(k) = h(device_type, org?) derived from the CERT
+  │ ALLOW
+  ▼
+Download W_t → 2. LOCAL TRAINING → Δ_k = θ_k − W_t
+  │
+  ▼
+Signed update (Δ_k, ñ_k, σ_k) → 3. UPDATE AUTHORIZATION [on-chain]
+   (signature, round, status, n_k clipped, H(Δ_k) committed)
+  │ ALLOW
+  ▼
+═════════════ OFF-CHAIN (aggregator) ═════════════
+4. COHORT FORMATION  (NEW)
+   • group admitted clients by c(k)  →  cohorts C_1 … C_M
+   • if |C_j| < m_min → back off to parent cohort (device_type only),
+     then to global
+   • compute global reference r_g and cohort references r_c (coordinate-wise
+     medians)
+
+5. COHORT-CONDITIONED FEATURES + SCORING  (NEW)
+   for client k in cohort c:
+     f1 = ‖Δ_k‖   f2 = cos(Δ_k, r_c)   f3 = ‖Δ_k − r_c‖
+   baselines (median, MAD) from cohort, SHRUNK toward global
+   → robust z_k → anomaly score a_k ∈ [0,1]
+
+   COHORT-CAPTURE GUARD  (NEW)
+   compare r_c with r_g and cohort stats with global stats
+   → cohort-level flag φ_c ∈ [0,1]  (catches a cohort filled with attackers)
+
+6. RISK  ρ_k = α·ã_k + (1−α)(1 − R_k),   ã_k = max(a_k, φ_c·a_k^glob)
+  │
+  ├───────────────────────────┬───────────────────────────────┐
+  ▼                           ▼
+7A. ROBUST AGGREGATION       7B. REPUTATION UPDATE (uses ã_k, not ρ_k)
+    g(ρ_k), norm-clip,           asymmetric update, sliding-window
+    per-cohort weight cap        revocation, probation
+    → W_{t+1}                    → status_k ∈ {ACTIVE, PROBATION, REVOKED}
+═══════════════════════════════════════════════════
+  ▼
+8. COMMIT TO CHAIN (one tx per round)
+   {H(W_{t+1}), cohort IDs + cohort size, per-client (ã_k, ρ_k, w_k, R_k, status),
+    cohort-flag φ_c, Merkle root of deny records}
+   → world state read by next round's Step 1 (including per-cohort thresholds)
+  ▼
+NEXT ROUND
