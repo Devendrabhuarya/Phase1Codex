@@ -143,6 +143,13 @@ def run_experiment(data, spec: ExperimentSpec, rounds: int, local_epochs: int, l
     malicious = np.zeros(client_count, dtype=bool)
     malicious[rng.choice(client_count, size=attacker_count, replace=False)] = True
     abac_mask = abac_admitted(malicious, abac_block_fraction, rng) if "abac" in spec.defence else np.ones(client_count, dtype=bool)
+    active_malicious = int((malicious & abac_mask).sum())
+    print(
+        "Client roles: "
+        f"benign={int((~malicious).sum())}, assigned_malicious={attacker_count}, "
+        f"acting_malicious={active_malicious}, blocked_malicious={attacker_count - active_malicious}, "
+        f"total={client_count}"
+    )
     weights = np.zeros(data.client_features[0].shape[1] + 1)
     root_update = local_update(data.root_features, data.root_labels, weights, local_epochs, learning_rate)
     round_rows: list[dict] = []

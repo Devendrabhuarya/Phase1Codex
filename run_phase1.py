@@ -3,11 +3,27 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from phase1_fl.data import prepare_iid_data
 from phase1_fl.federated import ExperimentSpec, run_experiment
 from phase1_fl.visualize import save_plots
+
+
+def log_traffic_class_counts(data) -> None:
+    """Print the binary traffic-label distribution across all prepared splits."""
+    labels = np.concatenate([
+        *data.client_labels,
+        data.root_labels,
+        data.test_labels,
+    ])
+    benign_count = int((labels == 0).sum())
+    attack_count = int((labels == 1).sum())
+    print(
+        "Traffic samples: "
+        f"benign={benign_count:,}, attack={attack_count:,}, total={len(labels):,}"
+    )
 
 
 def main() -> None:
@@ -35,6 +51,7 @@ def main() -> None:
         test_fraction=0.20,
         seed=arguments.seed,
     )
+    log_traffic_class_counts(data)
     specifications = [
         ExperimentSpec(aggregator, defence, attack, malicious_fraction)
         for aggregator in ["fedavg", "median", "trimmed_mean", "multi_krum", "fltrust"]
